@@ -82,6 +82,7 @@ export class FfmpegStreamerService implements OnModuleDestroy {
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'baseline',
       '-level', '3.1',
+      '-r', '30', // Fuerza 30fps para evitar el bug de 90k fps
       '-bf', '0' // Desactiva B-frames, crucial para WebRTC
     );
 

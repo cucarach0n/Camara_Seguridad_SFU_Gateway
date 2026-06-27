@@ -16,22 +16,16 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
     this.socket = io(backendUrl, {
       transports: ['websocket'],
       autoConnect: true,
-      reconnection: true
+      reconnection: true,
+      auth: { gatewayId: process.env.GATEWAY_ID || 'local-gateway-1' }
     });
 
     this.socket.on('connect', () => {
       this.logger.log('Conectado con éxito al backend principal. Registrando Gateway...');
       
       // Registrar este cliente como una puerta de enlace de medios local
-      this.socket.emit('register-gateway', {
-        gatewayId: process.env.GATEWAY_ID || 'local-gateway-1',
-        cameras: [
-          // Ejemplo de cámaras que gestiona este gateway local.
-          // En producción esto podría venir de una base de datos o archivo de configuración local.
-          { id: 'camara-patio', name: 'Cámara Patio Trasero', rtspUrl: process.env.RTSP_CAMARA_PATIO || 'rtsp://admin:admin123@192.168.1.50:554/stream1' },
-          { id: 'camara-entrada', name: 'Cámara Entrada Principal', rtspUrl: process.env.RTSP_CAMARA_ENTRADA || 'rtsp://admin:admin123@192.168.1.51:554/stream1' }
-        ]
-      });
+      // Las cámaras ahora se gestionan desde el backend BD
+      this.socket.emit('register-gateway');
     });
 
     this.socket.on('disconnect', () => {

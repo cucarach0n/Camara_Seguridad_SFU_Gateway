@@ -8,6 +8,7 @@ export class FfmpegStreamerService implements OnModuleDestroy {
   private retryCounts = new Map<string, number>();
   private readonly MAX_RETRIES = 5;
   private readonly RETRY_DELAY_MS = 5000;
+  public onStreamFailed?: (cameraId: string) => void;
 
   // Verifica si el flujo RTSP contiene una pista de audio
   private async hasAudio(rtspUrl: string): Promise<boolean> {
@@ -130,8 +131,14 @@ export class FfmpegStreamerService implements OnModuleDestroy {
       const processInfo = this.processes.get(cameraId);
       this.processes.delete(cameraId);
 
-      if (processInfo && code !== 0 && code !== null) {
-        this.handleRestart(cameraId, processInfo);
+      if (processInfo) {
+        if (code !== 0 && code !== null) {
+          this.handleRestart(cameraId, processInfo);
+        } else {
+          if (this.onStreamFailed) {
+            this.onStreamFailed(cameraId);
+          }
+        }
       }
     });
 
@@ -182,6 +189,9 @@ export class FfmpegStreamerService implements OnModuleDestroy {
       }, this.RETRY_DELAY_MS);
     } else {
       this.logger.error(`Se alcanzó el número máximo de reintentos (${this.MAX_RETRIES}) para la cámara ${cameraId}.`);
+      if (this.onStreamFailed) {
+        this.onStreamFailed(cameraId);
+      }
     }
   }
 

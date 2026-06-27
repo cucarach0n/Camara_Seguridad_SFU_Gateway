@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { io, Socket } from 'socket.io-client';
 import { FfmpegStreamerService } from './ffmpeg-streamer.service';
+import { exec } from 'child_process';
+import * as net from 'net';
 
 @Injectable()
 export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
@@ -28,9 +30,15 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
       this.socket.emit('register-gateway');
     });
 
-    this.socket.on('disconnect', () => {
-      this.logger.warn('Desconectado del backend principal. Intentando reconectar...');
+    this.socket.on('disconnect', (reason) => {
+      this.logger.warn(`Desconectado del backend principal: ${reason}`);
     });
+
+    this.ffmpegStreamerService.onStreamFailed = (cameraId) => {
+      if (this.socket && this.socket.connected) {
+        this.socket.emit('gateway-stream-failed', { cameraId });
+      }
+    };
 
     // Escuchar solicitudes de activación de streams de cámara
     this.socket.on('start-rtsp-stream', async (
@@ -73,6 +81,42 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
     this.socket.on('stop-rtsp-stream', (data: { cameraId: string }) => {
       this.logger.log(`Recibida orden de detención de streaming para: ${data.cameraId}`);
       this.ffmpegStreamerService.stopStreaming(data.cameraId);
+    });
+
+    // Escuchar solicitudes de sondeo (ping)
+    this.socket.on('probe-cameras', async (cameras: Array<{ id: string, rtspUrl: string }>) => {
+      this.logger.log(`Validando disponibilidad RTSP de ${cameras.length} cámaras...`);
+      const results = await Promise.all(cameras.map(async (cam) => {
+        return new Promise<{id: string, isOnline: boolean}>((resolve) => {
+          try {
+            // Usar ffprobe para comprobar el stream. Esto maneja correctamente la autenticación (evita falsos 401)
+            // y valida si realmente hay un stream disponible y no solo un puerto abierto.
+            const timeoutMs = 4000;
+            const timeoutUs = timeoutMs * 1000;
+            const cmd = `ffprobe -v error -show_entries format=format_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout ${timeoutUs} -i "${cam.rtspUrl}"`;
+            
+            exec(cmd, { timeout: timeoutMs + 1000 }, (error, stdout, stderr) => {
+              if (error) {
+                this.logger.debug(`[PROBE ${cam.id}] Offline: ${error.message.split('\\n')[0]}`);
+                resolve({ id: cam.id, isOnline: false });
+              } else {
+                const output = stdout.trim();
+                this.logger.debug(`[PROBE ${cam.id}] Output: ${output}`);
+                if (output.includes('rtp') || output.includes('rtsp')) {
+                  resolve({ id: cam.id, isOnline: true });
+                } else {
+                  resolve({ id: cam.id, isOnline: false });
+                }
+              }
+            });
+          } catch(e) {
+            this.logger.debug(`[PROBE ${cam.id}] Excepción: ${e.message}`);
+            resolve({ id: cam.id, isOnline: false });
+          }
+        });
+      }));
+      
+      this.socket.emit('cameras-status', results);
     });
   }
 

@@ -10,6 +10,10 @@ export class FfmpegStreamerService implements OnModuleDestroy {
   private readonly RETRY_DELAY_MS = 5000;
   public onStreamFailed?: (cameraId: string) => void;
 
+  public isStreamActive(cameraId: string): boolean {
+    return this.processes.has(cameraId);
+  }
+
   // Verifica si el flujo RTSP contiene una pista de audio
   private async hasAudio(rtspUrl: string): Promise<boolean> {
     return new Promise((resolve) => {
@@ -68,7 +72,8 @@ export class FfmpegStreamerService implements OnModuleDestroy {
     // Construir argumentos dinámicamente según la presencia de audio y el tipo de códec de video
     const args = [
       '-rtsp_transport', 'tcp',
-      '-re',
+      '-use_wallclock_as_timestamps', '1', // Obliga a FFmpeg a procesar los paquetes en tiempo real sin esperar al siguiente
+      '-user_agent', 'VLC/3.0.16 LibVLC/3.0.16',
       '-i', rtspUrl,
       '-map', '0:v:0'
     ];
@@ -80,10 +85,17 @@ export class FfmpegStreamerService implements OnModuleDestroy {
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-tune', 'zerolatency',
+      '-vf', 'scale=-2:720,fps=15,setpts=PTS-STARTPTS', // fps=15 suaviza el jitter de red TCP usando el reloj local
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'baseline',
       '-level', '3.1',
-      '-r', '30', // Fuerza 30fps para evitar el bug de 90k fps
+      '-b:v', '1000k', 
+      '-minrate', '1000k', // FORZAR padding de bitrate cuando no hay movimiento
+      '-maxrate', '1000k',
+      '-bufsize', '2000k',
+      '-x264opts', 'nal-hrd=cbr', // Rellenar con NAL units vacíos para mantener la red activa
+      '-g', '30', // Keyframe (I-frame) cada 30 frames para que WebRTC arranque rápido
+      '-sc_threshold', '0', // Evitar keyframes dinámicos que rompen el GOP en WebRTC
       '-bf', '0' // Desactiva B-frames, crucial para WebRTC
     );
 
@@ -101,6 +113,7 @@ export class FfmpegStreamerService implements OnModuleDestroy {
         '-ab', '128k',
         '-ar', '48000',
         '-ac', '2',
+        '-af', 'aresample=async=1,asetpts=PTS-STARTPTS', // Sincronizar audio y reescribir timestamps desde 0
         '-f', 'rtp',
         '-ssrc', '22222',
         '-payload_type', '102',

@@ -89,11 +89,18 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
       const results = await Promise.all(cameras.map(async (cam) => {
         return new Promise<{id: string, isOnline: boolean}>((resolve) => {
           try {
-            // Usar ffprobe para comprobar el stream. Esto maneja correctamente la autenticación (evita falsos 401)
-            // y valida si realmente hay un stream disponible y no solo un puerto abierto.
+            // Si la cámara ya está transmitiendo con FFmpeg, no hacemos el probe
+            // ya que algunas cámaras (ej. TP-Link) solo permiten 1 conexión RTSP a la vez
+            // y rechazarán a ffprobe con "Operation not permitted".
+            if (this.ffmpegStreamerService.isStreamActive(cam.id)) {
+              return resolve({ id: cam.id, isOnline: true });
+            }
+
+            // Usar ffprobe para comprobar el stream si no está activa.
             const timeoutMs = 4000;
             const timeoutUs = timeoutMs * 1000;
-            const cmd = `ffprobe -v error -show_entries format=format_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -timeout ${timeoutUs} -i "${cam.rtspUrl}"`;
+            
+            const cmd = `ffprobe -v error -show_entries format=format_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -user_agent "VLC/3.0.16 LibVLC/3.0.16" -timeout ${timeoutUs} -i "${cam.rtspUrl}"`;
             
             exec(cmd, { timeout: timeoutMs + 1000 }, (error, stdout, stderr) => {
               if (error) {

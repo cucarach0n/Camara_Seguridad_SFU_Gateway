@@ -72,8 +72,7 @@ export class FfmpegStreamerService implements OnModuleDestroy {
     // Construir argumentos dinámicamente según la presencia de audio y el tipo de códec de video
     const args = [
       '-rtsp_transport', 'tcp',
-      '-rw_timeout', '10000000', // 10 seconds timeout for reading data
-      '-stimeout', '10000000',   // 10 seconds timeout for socket connection
+      '-timeout', '10000000', // 10 seconds timeout for reading data/connection
       '-use_wallclock_as_timestamps', '1', // Obliga a FFmpeg a procesar los paquetes en tiempo real sin esperar al siguiente
       '-user_agent', 'VLC/3.0.16 LibVLC/3.0.16',
       '-i', rtspUrl,

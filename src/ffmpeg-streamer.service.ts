@@ -6,7 +6,7 @@ export class FfmpegStreamerService implements OnModuleDestroy {
   private readonly logger = new Logger(FfmpegStreamerService.name);
   private processes = new Map<string, { process: ChildProcess; rtspUrl: string; backendIp: string; videoPort: number; audioPort: number }>();
   private retryCounts = new Map<string, number>();
-  private readonly MAX_RETRIES = 5;
+  private readonly MAX_RETRIES = 0; // Fail-fast so backend can teardown Mediasoup transports properly
   private readonly RETRY_DELAY_MS = 5000;
   public onStreamFailed?: (cameraId: string) => void;
 

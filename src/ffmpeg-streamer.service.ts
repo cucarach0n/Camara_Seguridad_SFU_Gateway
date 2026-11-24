@@ -108,7 +108,7 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
   private buildVideoArgs(): string[] {
     const baseArgs = [
       '-map', '0:v:0',
-      '-vf', 'scale=-2:720,fps=15,setpts=PTS-STARTPTS', // fps=15 suaviza el jitter de red TCP usando el reloj local
+      '-vf', 'format=yuv420p,scale=-2:720,fps=15,setpts=PTS-STARTPTS', // format=yuv420p elimina el warning de deprecated pixel format de swscaler
       '-pix_fmt', 'yuv420p',
       '-g', '30', // Keyframe (I-frame) cada 30 frames para que WebRTC arranque rápido
       '-bf', '0', // Desactiva B-frames, crucial para WebRTC
@@ -210,10 +210,11 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
     // Construir argumentos dinámicamente según encoder activo y presencia de audio con máxima tolerancia a fallos
     const args = [
       '-rtsp_transport', 'tcp',
-      '-rtsp_flags', 'prefer_tcp',
       '-buffer_size', '4096000', // Buffer de 4MB para absorber ráfagas de I-frames y evitar CSeq desync
       '-stimeout', '10000000', // 10s timeout de socket RTSP en microsegundos
       '-timeout', '10000000', // 10s timeout de lectura/conexión
+      '-probesize', '10000000', // 10MB probesize para captura completa de SPS/PPS
+      '-analyzeduration', '10000000',
       '-reorder_queue_size', '4000', // Tolerar paquetes desordenados por jitter de red local
       '-max_delay', '500000', // Tolerar hasta 500ms de jitter de red
       '-err_detect', 'ignore_err', // Ignorar errores de NAL y slices dañados en vez de cerrar

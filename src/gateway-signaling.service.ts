@@ -9,7 +9,40 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(GatewaySignalingService.name);
   private socket: Socket;
 
-  constructor(private ffmpegStreamerService: FfmpegStreamerService) {}
+  constructor(private ffmpegStreamerService: FfmpegStreamerService) { }
+
+  /**
+   * Comprueba si el host y puerto RTSP de la cámara (por defecto 554) responden a nivel TCP.
+   * Es instantáneo (5-10ms), consume 0% CPU y no abre sesiones multimedia que desincronicen
+   * el protocolo RTSP / CSeq de la cámara.
+   */
+  private checkCameraTcp(rtspUrl: string, timeoutMs = 2500): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      try {
+        const parsed = new URL(rtspUrl);
+        const host = parsed.hostname;
+        const port = parsed.port ? parseInt(parsed.port, 10) : 554;
+
+        let resolved = false;
+        const socket = net.createConnection({ host, port });
+
+        const finish = (isOnline: boolean) => {
+          if (!resolved) {
+            resolved = true;
+            socket.destroy();
+            resolve(isOnline);
+          }
+        };
+
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+      } catch (err) {
+        resolve(false);
+      }
+    });
+  }
 
   onModuleInit() {
     const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
@@ -24,7 +57,7 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
 
     this.socket.on('connect', () => {
       this.logger.log('Conectado con éxito al backend principal. Registrando Gateway...');
-      
+
       // Registrar este cliente como una puerta de enlace de medios local
       // Las cámaras ahora se gestionan desde el backend BD
       this.socket.emit('register-gateway');
@@ -46,7 +79,7 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
       ack
     ) => {
       this.logger.log(`Recibida orden de inicio de streaming: ${JSON.stringify(data)}`);
-      
+
       let backendHost = data.backendIp || '127.0.0.1';
       if (backendHost === '0.0.0.0' && process.env.BACKEND_URL) {
         try {
@@ -85,44 +118,21 @@ export class GatewaySignalingService implements OnModuleInit, OnModuleDestroy {
 
     // Escuchar solicitudes de sondeo (ping)
     this.socket.on('probe-cameras', async (cameras: Array<{ id: string, rtspUrl: string }>) => {
-      this.logger.log(`Validando disponibilidad RTSP de ${cameras.length} cámaras...`);
+      if (!Array.isArray(cameras) || cameras.length === 0) return;
+
       const results = await Promise.all(cameras.map(async (cam) => {
-        return new Promise<{id: string, isOnline: boolean}>((resolve) => {
-          try {
-            // Si la cámara ya está transmitiendo con FFmpeg, no hacemos el probe
-            // ya que algunas cámaras (ej. TP-Link) solo permiten 1 conexión RTSP a la vez
-            // y rechazarán a ffprobe con "Operation not permitted".
-            if (this.ffmpegStreamerService.isStreamActive(cam.id)) {
-              return resolve({ id: cam.id, isOnline: true });
+            const camIdStr = String(cam.id);
+
+            // 1. Si la cámara ya está transmitiendo activamente con FFmpeg, está online
+            if (this.ffmpegStreamerService.isStreamActive(camIdStr)) {
+              return { id: camIdStr, isOnline: true };
             }
 
-            // Usar ffprobe para comprobar el stream si no está activa.
-            const timeoutMs = 4000;
-            const timeoutUs = timeoutMs * 1000;
-            
-            const cmd = `ffprobe -v error -show_entries format=format_name -of default=noprint_wrappers=1:nokey=1 -rtsp_transport tcp -user_agent "VLC/3.0.16 LibVLC/3.0.16" -timeout ${timeoutUs} -i "${cam.rtspUrl}"`;
-            
-            exec(cmd, { timeout: timeoutMs + 1000 }, (error, stdout, stderr) => {
-              if (error) {
-                this.logger.debug(`[PROBE ${cam.id}] Offline: ${error.message.split('\\n')[0]}`);
-                resolve({ id: cam.id, isOnline: false });
-              } else {
-                const output = stdout.trim();
-                this.logger.debug(`[PROBE ${cam.id}] Output: ${output}`);
-                if (output.includes('rtp') || output.includes('rtsp')) {
-                  resolve({ id: cam.id, isOnline: true });
-                } else {
-                  resolve({ id: cam.id, isOnline: false });
-                }
-              }
-            });
-          } catch(e) {
-            this.logger.debug(`[PROBE ${cam.id}] Excepción: ${e.message}`);
-            resolve({ id: cam.id, isOnline: false });
-          }
-        });
+        // 2. Si no está transmitiendo, verificar si el puerto TCP RTSP está abierto (sin abrir sesión de video)
+        const isOnline = await this.checkCameraTcp(cam.rtspUrl);
+        return { id: camIdStr, isOnline };
       }));
-      
+
       this.socket.emit('cameras-status', results);
     });
   }

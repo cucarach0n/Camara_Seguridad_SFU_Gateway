@@ -211,7 +211,6 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
     const args = [
       '-rtsp_transport', 'tcp',
       '-buffer_size', '4096000', // Buffer de 4MB para absorber ráfagas de I-frames y evitar CSeq desync
-      '-stimeout', '10000000', // 10s timeout de socket RTSP en microsegundos
       '-timeout', '10000000', // 10s timeout de lectura/conexión
       '-probesize', '10000000', // 10MB probesize para captura completa de SPS/PPS
       '-analyzeduration', '10000000',

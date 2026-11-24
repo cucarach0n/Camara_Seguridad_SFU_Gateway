@@ -8,8 +8,8 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(FfmpegStreamerService.name);
   private processes = new Map<string, { process: ChildProcess; rtspUrl: string; backendIp: string; videoPort: number; audioPort: number }>();
   private retryCounts = new Map<string, number>();
-  private readonly MAX_RETRIES = 0; // Fail-fast so backend can teardown Mediasoup transports properly
-  private readonly RETRY_DELAY_MS = 5000;
+  private readonly MAX_RETRIES = 1; // 1 reintento local rápido antes de notificar fallo definitivo al backend
+  private readonly RETRY_DELAY_MS = 2000;
   public onStreamFailed?: (cameraId: string) => void;
   private activeEncoder: VideoEncoder = 'libx264';
 
@@ -207,10 +207,17 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
       `Iniciando FFmpeg para cámara ${cameraId}. Video codec origen: ${videoCodec}, Encoder destino: [${this.activeEncoder}], Audio detectado: ${streamHasAudio}. Destino: ${backendIp} (Video: ${videoPort}, Audio: ${audioPort})`
     );
 
-    // Construir argumentos dinámicamente según encoder activo y presencia de audio
+    // Construir argumentos dinámicamente según encoder activo y presencia de audio con máxima tolerancia a fallos
     const args = [
       '-rtsp_transport', 'tcp',
-      '-timeout', '10000000', // 10 seconds timeout for reading data/connection
+      '-rtsp_flags', 'prefer_tcp',
+      '-buffer_size', '4096000', // Buffer de 4MB para absorber ráfagas de I-frames y evitar CSeq desync
+      '-stimeout', '10000000', // 10s timeout de socket RTSP en microsegundos
+      '-timeout', '10000000', // 10s timeout de lectura/conexión
+      '-reorder_queue_size', '4000', // Tolerar paquetes desordenados por jitter de red local
+      '-max_delay', '500000', // Tolerar hasta 500ms de jitter de red
+      '-err_detect', 'ignore_err', // Ignorar errores de NAL y slices dañados en vez de cerrar
+      '-fflags', '+genpts+discardcorrupt+nobuffer', // Descartar paquetes corruptos sin frenar el flujo
       '-use_wallclock_as_timestamps', '1', // Obliga a FFmpeg a procesar los paquetes en tiempo real sin esperar al siguiente
       '-user_agent', 'VLC/3.0.16 LibVLC/3.0.16',
       '-i', rtspUrl,
@@ -255,18 +262,13 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
 
     ffmpegProcess.on('close', (code) => {
       this.logger.warn(`El proceso FFmpeg de la cámara ${cameraId} se cerró con código: ${code}`);
-      
+
       const processInfo = this.processes.get(cameraId);
       this.processes.delete(cameraId);
 
       if (processInfo) {
-        if (code !== 0 && code !== null) {
-          this.handleRestart(cameraId, processInfo);
-        } else {
-          if (this.onStreamFailed) {
-            this.onStreamFailed(cameraId);
-          }
-        }
+        // Cierre no intencional (stopStreaming no fue llamado). Intentar recuperación.
+        this.handleRestart(cameraId, processInfo);
       }
     });
 
@@ -291,7 +293,7 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
     const processInfo = this.processes.get(cameraId);
     if (processInfo) {
       this.logger.log(`Deteniendo stream de la cámara: ${cameraId}`);
-      
+
       processInfo.process.kill('SIGTERM');
       setTimeout(() => {
         if (this.processes.has(cameraId)) {
@@ -299,7 +301,7 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
           processInfo.process.kill('SIGKILL');
         }
       }, 3000);
-      
+
       this.processes.delete(cameraId);
       this.retryCounts.delete(cameraId);
     }

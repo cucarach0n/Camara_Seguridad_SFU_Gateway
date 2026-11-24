@@ -8,8 +8,8 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(FfmpegStreamerService.name);
   private processes = new Map<string, { process: ChildProcess; rtspUrl: string; backendIp: string; videoPort: number; audioPort: number }>();
   private retryCounts = new Map<string, number>();
-  private readonly MAX_RETRIES = 1; // 1 reintento local rápido antes de notificar fallo definitivo al backend
-  private readonly RETRY_DELAY_MS = 2000;
+  private readonly MAX_RETRIES = 0; // Fail-fast: Notificar al backend para que destruya y recree el PlainTransport sin congelar WebRTC
+  private readonly RETRY_DELAY_MS = 3000;
   public onStreamFailed?: (cameraId: string) => void;
   private activeEncoder: VideoEncoder = 'libx264';
 
@@ -294,11 +294,31 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
     if (processInfo) {
       this.logger.log(`Deteniendo stream de la cámara: ${cameraId}`);
 
-      processInfo.process.kill('SIGTERM');
+      // 1. Intentar salida limpia enviando 'q' a stdin para que FFmpeg envíe RTSP TEARDOWN a la cámara
+      try {
+        if (processInfo.process.stdin && processInfo.process.stdin.writable) {
+          processInfo.process.stdin.write('q');
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // 2. Enviar SIGTERM tras un breve margen si sigue vivo
+      setTimeout(() => {
+        try {
+          if (this.processes.has(cameraId) || !processInfo.process.killed) {
+            processInfo.process.kill('SIGTERM');
+          }
+        } catch (e) { }
+      }, 300);
+
+      // 3. Forzar SIGKILL de seguridad a los 3 segundos
       setTimeout(() => {
         if (this.processes.has(cameraId)) {
-          this.logger.warn(`FFmpeg de cámara ${cameraId} no respondió a SIGTERM, forzando SIGKILL`);
-          processInfo.process.kill('SIGKILL');
+          this.logger.warn(`FFmpeg de cámara ${cameraId} no respondió a cierre limpio, forzando SIGKILL`);
+          try {
+            processInfo.process.kill('SIGKILL');
+          } catch (e) { }
         }
       }, 3000);
 
@@ -318,7 +338,7 @@ export class FfmpegStreamerService implements OnModuleInit, OnModuleDestroy {
         }
       }, this.RETRY_DELAY_MS);
     } else {
-      this.logger.error(`Se alcanzó el número máximo de reintentos (${this.MAX_RETRIES}) para la cámara ${cameraId}.`);
+      this.logger.warn(`Notificando fallo de stream de cámara ${cameraId} al backend para reinicio limpio.`);
       if (this.onStreamFailed) {
         this.onStreamFailed(cameraId);
       }
